@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FaArrowsRotate, FaChartColumn, FaTrashArrowUp } from 'react-icons/fa6';
+import { getStats, restoreParticipant, restoreAllParticipants } from '@/lib/participants-store';
 import type { ParticipantDto, StatsDto } from '@/lib/types';
 
 const PAGE_SIZE = 10;
@@ -11,28 +12,19 @@ export default function AdminDashboard() {
   const [excludedParticipants, setExcludedParticipants] = useState<ParticipantDto[]>([]);
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
-  const [isPending, startTransition] = useTransition();
 
-  const fetchStats = useCallback(async () => {
-    const response = await fetch('/api/stats', { cache: 'no-store' });
-    const data = (await response.json()) as {
-      stats?: StatsDto;
-      excludedParticipants?: ParticipantDto[];
-      error?: string;
-    };
-
-    if (!response.ok || !data.stats || !data.excludedParticipants) {
-      throw new Error(data.error ?? 'تعذر تحميل بيانات لوحة التحكم.');
+  const fetchStats = useCallback(() => {
+    try {
+      const data = getStats();
+      setStats(data.stats);
+      setExcludedParticipants(data.excludedParticipants);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل البيانات.');
     }
-
-    setStats(data.stats);
-    setExcludedParticipants(data.excludedParticipants);
   }, []);
 
   useEffect(() => {
-    fetchStats().catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : 'تعذر تحميل البيانات.');
-    });
+    fetchStats();
   }, [fetchStats]);
 
   const totalPages = useMemo(
@@ -53,44 +45,22 @@ export default function AdminDashboard() {
 
   const restoreOne = (id: number) => {
     setError('');
-    startTransition(async () => {
-      try {
-        const response = await fetch('/api/participants/restore', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id }),
-        });
-
-        if (!response.ok) {
-          const data = (await response.json()) as { error?: string };
-          throw new Error(data.error ?? 'فشل استعادة المشارك.');
-        }
-
-        await fetchStats();
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'تعذر تنفيذ العملية.');
-      }
-    });
+    try {
+      restoreParticipant(id);
+      fetchStats();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'تعذر تنفيذ العملية.');
+    }
   };
 
   const restoreAll = () => {
     setError('');
-    startTransition(async () => {
-      try {
-        const response = await fetch('/api/participants/restore-bulk', {
-          method: 'POST',
-        });
-
-        if (!response.ok) {
-          const data = (await response.json()) as { error?: string };
-          throw new Error(data.error ?? 'فشل استعادة الجميع.');
-        }
-
-        await fetchStats();
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'تعذر تنفيذ العملية.');
-      }
-    });
+    try {
+      restoreAllParticipants();
+      fetchStats();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'تعذر تنفيذ العملية.');
+    }
   };
 
   return (
@@ -121,7 +91,7 @@ export default function AdminDashboard() {
             <button
               type="button"
               onClick={restoreAll}
-              disabled={isPending || excludedParticipants.length === 0}
+              disabled={excludedParticipants.length === 0}
               className="inline-flex items-center gap-2 rounded-xl border border-yellow-400/50 bg-yellow-500/20 px-4 py-2 font-bold text-yellow-200 transition hover:bg-yellow-500/30 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <FaArrowsRotate />
@@ -160,7 +130,6 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           onClick={() => restoreOne(participant.id)}
-                          disabled={isPending}
                           className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/50 bg-emerald-700/30 px-3 py-1.5 text-emerald-100 transition hover:bg-emerald-700/50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           <FaTrashArrowUp />

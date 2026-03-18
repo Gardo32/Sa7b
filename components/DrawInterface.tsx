@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Confetti from 'react-confetti';
 import { FaGift, FaMoon, FaStar, FaWandMagicSparkles } from 'react-icons/fa6';
 import WinnerCard from '@/components/WinnerCard';
+import { drawWinner as pickWinner } from '@/lib/participants-store';
 import type { DrawMode, ParticipantDto } from '@/lib/types';
 
 const spinNames = [
@@ -28,9 +29,9 @@ export default function DrawInterface() {
   const [winner, setWinner] = useState<ParticipantDto | null>(null);
   const [error, setError] = useState<string>('');
   const [rollingName, setRollingName] = useState<string>('');
+  const [isDrawing, setIsDrawing] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
     const updateSize = () => {
@@ -43,7 +44,7 @@ export default function DrawInterface() {
   }, []);
 
   useEffect(() => {
-    if (!isPending) return;
+    if (!isDrawing) return;
 
     let i = 0;
     const interval = setInterval(() => {
@@ -52,50 +53,37 @@ export default function DrawInterface() {
     }, 60);
 
     return () => clearInterval(interval);
-  }, [isPending]);
+  }, [isDrawing]);
 
   const selectedModeLabel = useMemo(
     () => modeOptions.find((item) => item.value === mode)?.label ?? 'كل المشاركين',
     [mode],
   );
 
-  const drawWinner = () => {
+  const handleDraw = () => {
     setError('');
     setWinner(null);
     setShowConfetti(false);
+    setIsDrawing(true);
 
-    startTransition(async () => {
-      try {
-        const start = performance.now();
+    // Simulate suspense delay, then pick a winner client-side
+    setTimeout(() => {
+      const result = pickWinner(mode);
 
-        const response = await fetch('/api/draw', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode }),
-        });
-
-        const data = (await response.json()) as { winner?: ParticipantDto; error?: string };
-        const elapsed = performance.now() - start;
-        const suspenseDelay = Math.max(0, 4800 - elapsed);
-
-        await new Promise((resolve) => setTimeout(resolve, suspenseDelay));
-
-        if (!response.ok || !data.winner) {
-          setRollingName('');
-          setError(data.error ?? 'تعذر السحب حالياً، حاول لاحقاً.');
-          return;
-        }
-
+      if (!result) {
         setRollingName('');
-        setWinner(data.winner);
-        setShowConfetti(true);
-
-        setTimeout(() => setShowConfetti(false), 8000);
-      } catch {
-        setRollingName('');
-        setError('حدث خطأ غير متوقع أثناء السحب.');
+        setIsDrawing(false);
+        setError('لا يوجد مشاركون متبقون في هذه الفئة.');
+        return;
       }
-    });
+
+      setRollingName('');
+      setIsDrawing(false);
+      setWinner(result);
+      setShowConfetti(true);
+
+      setTimeout(() => setShowConfetti(false), 8000);
+    }, 4800);
   };
 
   return (
@@ -116,7 +104,7 @@ export default function DrawInterface() {
               key={option.value}
               type="button"
               onClick={() => setMode(option.value)}
-              disabled={isPending}
+              disabled={isDrawing}
               className={`rounded-xl border px-3 py-2 text-sm transition md:text-base ${
                 mode === option.value
                   ? 'border-yellow-400 bg-yellow-500/20 text-yellow-300'
@@ -134,8 +122,8 @@ export default function DrawInterface() {
 
         <button
           type="button"
-          disabled={isPending}
-          onClick={drawWinner}
+          disabled={isDrawing}
+          onClick={handleDraw}
           className="gold-shimmer mx-auto flex w-full max-w-md items-center justify-center gap-3 rounded-2xl border border-yellow-300/70 px-6 py-5 text-2xl font-bold text-emerald-950 shadow-glow transition hover:scale-[1.02] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
         >
           <FaGift />
@@ -143,7 +131,7 @@ export default function DrawInterface() {
           <FaWandMagicSparkles />
         </button>
 
-        {isPending ? (
+        {isDrawing ? (
           <div className="mt-7 rounded-2xl border border-yellow-500/40 bg-black/30 p-6 text-center">
             <p className="mb-2 flex items-center justify-center gap-2 text-yellow-300">
               <FaMoon className="animate-pulse" />
@@ -159,7 +147,7 @@ export default function DrawInterface() {
 
         {winner ? <WinnerCard winner={winner} onClose={() => setWinner(null)} /> : null}
 
-        {!winner && !error && !isPending ? (
+        {!winner && !error && !isDrawing ? (
           <div className="mt-8 flex items-center justify-center gap-2 text-emerald-100/70">
             <FaStar className="text-yellow-400" />
             السحب يستبعد الفائز مباشرة لمنع تكرار اسمه
