@@ -1,112 +1,104 @@
-import { Pool } from 'pg';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { ParticipantDto } from './types';
 
-// Connect to Neon PostgreSQL using the connection string
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: true,
-});
+export type DrawMode = 'all' | 'pre_k_k3' | 'k4_k7';
 
-export async function executeQuery(text: string, params?: any[]): Promise<any> {
-  const start = Date.now();
+const dataFilePath = path.join(process.cwd(), 'participants.json');
+
+const readParticipants = (): ParticipantDto[] => {
   try {
-    const res = await pool.query(text, params);
-    const duration = Date.now() - start;
-    console.log('Executed query', { text, duration, rows: res.rowCount });
-    return res;
-  } catch (error) {
-    console.error('Query error', error);
-    throw error;
+    if (!fs.existsSync(dataFilePath)) return [];
+    const data = fs.readFileSync(dataFilePath, 'utf-8');
+    return JSON.parse(data);
+  } catch (err) {
+    console.error('Failed to read data:', err);
+    return [];
   }
-}
+};
 
-export async function getParticipants(program: 'Primary_Program' | 'Secondary_Program', ranking: string) {
-  console.log(`Fetching participants from ${program} with ranking ${ranking}`);
-  
-  // Query to get unselected participants with a specific ranking
-  const query = `
-    SELECT * FROM ${program}
-    WHERE ranking = $1 AND (selected IS NULL OR selected = FALSE)
-    ORDER BY id ASC
-  `;
-  
+const writeParticipants = (participants: ParticipantDto[]): void => {
   try {
-    const result = await executeQuery(query, [ranking]);
-    console.log(`Found ${result.rowCount} participants`);
-    return result.rows;
-  } catch (error) {
-    console.error('Error in getParticipants:', error);
-    throw error;
+    const tempPath = `${dataFilePath}.tmp.${Date.now()}`;
+    fs.writeFileSync(tempPath, JSON.stringify(participants, null, 2), 'utf-8');
+    fs.renameSync(tempPath, dataFilePath);
+  } catch (err) {
+    console.error('Failed to write data:', err);
   }
-}
+};
 
-export async function getSelectedParticipants(program: 'Primary_Program' | 'Secondary_Program', ranking?: string) {
-  // Query to get selected participants
-  let query = `
-    SELECT * FROM ${program}
-    WHERE selected = TRUE
-  `;
+export const getParticipants = (): ParticipantDto[] => {
+  return readParticipants();
+};
+
+export const getParticipantById = (id: number): ParticipantDto | undefined => {
+  const participants = readParticipants();
+  return participants.find((p) => p.id === id);
+};
+
+export const getParticipantsByCohort = (cohort: 'pre_k_k3' | 'k4_k7'): ParticipantDto[] => {
+  const participants = readParticipants();
+  return participants.filter((p) => p.cohort === cohort);
+};
+
+export const getAvailableParticipants = (mode: DrawMode): ParticipantDto[] => {
+  const participants = readParticipants();
   
-  const params: any[] = [];
-  
-  if (ranking) {
-    query += ' AND ranking = $1';
-    params.push(ranking);
+  if (mode === 'all') {
+    return participants.filter((p) => p.excluded_all === 0);
   }
   
-  query += ' ORDER BY selection_date DESC';
+  if (mode === 'pre_k_k3') {
+    return participants.filter((p) => p.cohort === 'pre_k_k3' && p.excluded_all === 0);
+  }
   
-  const result = await executeQuery(query, params);
-  return result.rows;
-}
+  if (mode === 'k4_k7') {
+    return participants.filter((p) => p.cohort === 'k4_k7' && p.excluded_all === 0);
+  }
+  
+  return [];
+};
 
-export async function selectParticipant(
-  program: 'Primary_Program' | 'Secondary_Program',
-  participantId: number
-) {
-  const query = `
-    UPDATE ${program}
-    SET selected = TRUE, selection_date = NOW()
-    WHERE id = $1
-    RETURNING *
-  `;
-  const result = await executeQuery(query, [participantId]);
-  return result.rows[0];
-}
+export const excludeParticipant = (id: number, mode: DrawMode): void => {
+  const participants = readParticipants();
+  const participant = participants.find((p) => p.id === id);
+  
+  if (!participant) return;
+  
+  participant.excluded_all = 1;
+  participant.excluded_pre_k_k3 = 1;
+  participant.excluded_k4_k7 = 1;
+  participant.excluded_by_mode = mode;
+  participant.excluded_at = new Date().toISOString();
+  
+  writeParticipants(participants);
+};
 
-export async function unselectParticipant(
-  program: 'Primary_Program' | 'Secondary_Program',
-  participantId: number
-) {
-  const query = `
-    UPDATE ${program}
-    SET selected = FALSE, selection_date = NULL
-    WHERE id = $1
-    RETURNING *
-  `;
-  const result = await executeQuery(query, [participantId]);
-  return result.rows[0];
-}
+export const resetAllExclusions = (): void => {
+  const participants = readParticipants();
+  participants.forEach((p) => {
+    p.excluded_all = 0;
+    p.excluded_pre_k_k3 = 0;
+    p.excluded_k4_k7 = 0;
+    p.excluded_by_mode = null;
+    p.excluded_reason = null;
+    p.excluded_at = null;
+  });
+  writeParticipants(participants);
+};
 
-export async function resetSelections(program: 'Primary_Program' | 'Secondary_Program') {
-  const query = `
-    UPDATE ${program}
-    SET selected = FALSE, selection_date = NULL
-    WHERE selected = TRUE
-  `;
-  return executeQuery(query);
-}
+export const resetParticipant = (id: number): void => {
+  const participants = readParticipants();
+  const participant = participants.find((p) => p.id === id);
+  
+  if (!participant) return;
+  
+  participant.excluded_all = 0;
+  participant.excluded_pre_k_k3 = 0;
+  participant.excluded_k4_k7 = 0;
+  participant.excluded_by_mode = null;
+  participant.excluded_reason = null;
+  participant.excluded_at = null;
+  writeParticipants(participants);
+};
 
-export async function getGroupStats(program: 'Primary_Program' | 'Secondary_Program') {
-  const query = `
-    SELECT 
-      group_name,
-      COUNT(*) AS total,
-      SUM(CASE WHEN selected = TRUE THEN 1 ELSE 0 END) AS selected,
-      ROUND((SUM(CASE WHEN selected = TRUE THEN 1 ELSE 0 END)::numeric / COUNT(*)::numeric) * 100, 2) AS percentage
-    FROM ${program}
-    GROUP BY group_name
-    ORDER BY group_name
-  `;
-  const result = await executeQuery(query);
-  return result.rows;
-}
